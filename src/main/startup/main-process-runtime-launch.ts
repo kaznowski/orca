@@ -67,6 +67,15 @@ function settleDesktopActivation(): void {
   })
 }
 
+/** E2E only: a serve host with no browser of its own, as the WSL distro's server is. Never packaged. */
+function e2eHeadlessServeWithoutBrowser(): boolean {
+  return (
+    !app.isPackaged &&
+    process.env.ORCA_E2E_HEADLESS === '1' &&
+    process.env.ORCA_E2E_HEADLESS_SERVE_WITHOUT_BROWSER === '1'
+  )
+}
+
 function installRuntimeRpc(
   runtime: RuntimeService,
   serveOptions: ReturnType<typeof getServeOptions> | null
@@ -163,7 +172,7 @@ async function launchServeMode(
     await placeUnshownLiveTerminalsBestEffort(runtime)
   }
   // Why: headless servers can't mount <webview> panes; use offscreen WebContents, gated on a real display so browser.headless.v1 stays honest.
-  if (state.headlessBrowserDisplayAvailable) {
+  if (state.headlessBrowserDisplayAvailable && !e2eHeadlessServeWithoutBrowser()) {
     runtime.setOffscreenBrowserBackend(
       new OffscreenBrowserBackend(browserManager, {
         getAgentBrowserBridge: () => state.agentBrowserBridge,

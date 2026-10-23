@@ -11,9 +11,8 @@
  *   pnpm exec playwright test tests/e2e/wsl-move-host-pane-history.spec.ts \
  *     --config tests/playwright.config.ts --project electron-headless --workers=1
  */
-import { execFileSync } from 'node:child_process'
 import { randomUUID } from 'node:crypto'
-import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
+import { mkdtempSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import type { Page, TestInfo } from '@stablyai/playwright-test'
@@ -29,11 +28,13 @@ import {
   readPairedPaneContent
 } from './helpers/paired-host-terminal'
 import { launchHeadlessPairedRuntimeHost } from './helpers/headless-paired-runtime-host'
-import { mutateStoppedProfileState } from './helpers/persisted-profile-state'
+import {
+  createMovedRepo,
+  MOVED_BROWSER_URL,
+  MOVED_TAB,
+  seedImportedMovedTab
+} from './helpers/wsl-moved-host-profile'
 import { quotePosixShell } from '../../src/shared/shell-argument-quoting'
-import { makeTerminalScrollbackSnapshotRef } from '../../src/main/terminal-scrollback-snapshots'
-import { DEFAULT_LOCAL_ORCA_PROFILE_ID } from '../../src/shared/orca-profiles'
-import { ORCAD_MIGRATION_MANIFEST_VERSION } from '../../src/shared/orcad-migration/orcad-migration-manifest-validation'
 import { toWebTerminalSurfaceTabId } from '../../src/shared/terminal-surface-id'
 
 const scratch = mkdtempSync(path.join(os.tmpdir(), 'orca-moved-history-'))
@@ -139,174 +140,6 @@ test('a slept host pane this desktop never painted shows its history when opened
   }
 })
 
-const MOVED_TAB = 'moved-tab-0001'
-const MOVED_LEAF = 'moved-leaf-0001'
-const MOVED_GROUP = 'moved-group-0001'
-const MOVED_BROWSER = 'moved-browser-0001'
-const MOVED_BROWSER_PAGE = 'moved-browser-page-0001'
-const MOVED_BROWSER_URL = 'https://example.invalid/moved-docs'
-
-/**
- * The host's state right after it imported a moved project: a terminal tab whose only history is
- * a stored scrollback snapshot, with no terminal session behind it (the move strips the desktop's).
- */
-function seedImportedMovedTab(
-  userDataDir: string,
-  worktreeId: string,
-  history: string,
-  importedByWslMove = true
-): void {
-  const ref = makeTerminalScrollbackSnapshotRef(MOVED_TAB, MOVED_LEAF)
-  const roots = [userDataDir, path.join(userDataDir, 'profiles', DEFAULT_LOCAL_ORCA_PROFILE_ID)]
-  for (const root of roots) {
-    mkdirSync(path.join(root, 'terminal-scrollback'), { recursive: true })
-    writeFileSync(path.join(root, 'terminal-scrollback', `${ref}.bin`), history)
-  }
-  mutateStoppedProfileState(userDataDir, (state) => {
-    // oxlint-disable-next-line typescript/consistent-type-assertions -- SAFETY: this test seeded the profile and reads only these session maps.
-    const session = state.workspaceSession as Record<string, Record<string, unknown>>
-    // Why: a headless host has no window that would restore the pane itself; keep the fixture's off it.
-    Reflect.set(session, 'activeWorktreeId', null)
-    if (importedByWslMove) {
-      // The receipt a committed WSL move leaves: it is what marks these panes as moved here.
-      state.orcadMigrationImportReceipts = [
-        {
-          version: ORCAD_MIGRATION_MANIFEST_VERSION,
-          migrationId: 'moved-history-move',
-          manifestSha256: '0'.repeat(64),
-          source: {
-            kind: 'local-wsl',
-            distro: 'Ubuntu',
-            scopeRepoIds: [worktreeId.split('::')[0]],
-            scopeFolderWorkspaceIds: [],
-            generation: 1
-          },
-          importedAt: '2026-10-23T00:00:00.000Z',
-          repositoryIds: [worktreeId.split('::')[0]],
-          projectGroupIds: [],
-          folderWorkspaceIds: []
-        }
-      ]
-    }
-    session.tabsByWorktree = {
-      ...session.tabsByWorktree,
-      [worktreeId]: [
-        {
-          id: MOVED_TAB,
-          ptyId: null,
-          worktreeId,
-          title: 'Shell',
-          customTitle: null,
-          color: null,
-          sortOrder: 0,
-          createdAt: 0
-        }
-      ]
-    }
-    session.unifiedTabs = {
-      ...session.unifiedTabs,
-      [worktreeId]: [
-        {
-          id: MOVED_TAB,
-          entityId: MOVED_TAB,
-          groupId: MOVED_GROUP,
-          worktreeId,
-          contentType: 'terminal',
-          label: 'Shell',
-          customLabel: null,
-          color: null,
-          sortOrder: 0,
-          createdAt: 0
-        },
-        {
-          id: MOVED_BROWSER,
-          entityId: MOVED_BROWSER,
-          groupId: MOVED_GROUP,
-          worktreeId,
-          contentType: 'browser',
-          label: 'Browser 1',
-          customLabel: null,
-          color: null,
-          sortOrder: 1,
-          createdAt: 1
-        }
-      ]
-    }
-    const page = {
-      id: MOVED_BROWSER_PAGE,
-      workspaceId: MOVED_BROWSER,
-      worktreeId,
-      url: MOVED_BROWSER_URL,
-      title: 'Moved docs',
-      loading: false,
-      faviconUrl: null,
-      canGoBack: false,
-      canGoForward: false,
-      loadError: null,
-      createdAt: 1
-    }
-    session.browserTabsByWorktree = {
-      ...session.browserTabsByWorktree,
-      [worktreeId]: [
-        {
-          id: MOVED_BROWSER,
-          worktreeId,
-          label: 'Browser 1',
-          activePageId: MOVED_BROWSER_PAGE,
-          pageIds: [MOVED_BROWSER_PAGE],
-          url: MOVED_BROWSER_URL,
-          title: 'Moved docs',
-          loading: false,
-          faviconUrl: null,
-          canGoBack: false,
-          canGoForward: false,
-          loadError: null,
-          createdAt: 1
-        }
-      ]
-    }
-    session.browserPagesByWorkspace = {
-      ...session.browserPagesByWorkspace,
-      [MOVED_BROWSER]: [page]
-    }
-    session.tabGroups = {
-      ...session.tabGroups,
-      [worktreeId]: [
-        {
-          id: MOVED_GROUP,
-          worktreeId,
-          activeTabId: MOVED_TAB,
-          tabOrder: [MOVED_TAB, MOVED_BROWSER]
-        }
-      ]
-    }
-    session.activeGroupIdByWorktree = {
-      ...session.activeGroupIdByWorktree,
-      [worktreeId]: MOVED_GROUP
-    }
-    session.terminalLayoutsByTabId = {
-      ...session.terminalLayoutsByTabId,
-      [MOVED_TAB]: {
-        root: { type: 'leaf', leafId: MOVED_LEAF },
-        activeLeafId: MOVED_LEAF,
-        expandedLeafId: null,
-        scrollbackRefsByLeafId: { [MOVED_LEAF]: ref }
-      }
-    }
-  })
-}
-
-function createRepo(root: string): string {
-  const repoPath = path.join(root, 'moved-repo')
-  mkdirSync(repoPath)
-  execFileSync('git', ['init', '-q', '-b', 'main'], { cwd: repoPath })
-  const identity = ['-c', 'user.name=e2e', '-c', 'user.email=e2e@example.invalid']
-  execFileSync('git', [...identity, 'commit', '-q', '--allow-empty', '-m', 'init'], {
-    cwd: repoPath
-  })
-  return repoPath
-}
-
 type ImportedOutcome = { marker: string; content: string; browserUrls: string[] }
 
 async function openImportedPane(
@@ -315,7 +148,7 @@ async function openImportedPane(
 ): Promise<ImportedOutcome> {
   const outcome: ImportedOutcome = { marker: '', content: '', browserUrls: [] }
   const root = mkdtempSync(path.join(os.tmpdir(), 'orca-moved-import-'))
-  const repoPath = createRepo(root)
+  const repoPath = createMovedRepo(root)
   // A windowless host, as the distro's orcad is: nothing there restores a pane or a browser tab itself.
   const host = await launchHeadlessPairedRuntimeHost({ pinnedServePort: true })
   try {
@@ -327,12 +160,9 @@ async function openImportedPane(
     outcome.marker = `imported-${randomUUID()} before the move`
     await host.restartServeProcess({
       betweenProcesses: () =>
-        seedImportedMovedTab(
-          host.userDataDir,
-          worktreeId,
-          `${outcome.marker}\r\n`,
+        seedImportedMovedTab(host.userDataDir, worktreeId, `${outcome.marker}\r\n`, {
           importedByWslMove
-        )
+        })
     })
     const client = await launchPairedElectronClient(host.offer, testInfo, 'moved-import')
     try {
