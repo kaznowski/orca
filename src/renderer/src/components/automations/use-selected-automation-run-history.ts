@@ -1,6 +1,6 @@
 /** Reads selected history through its captured owner, with a fresh answer for each run navigation. */
 
-import { useEffect, useMemo, useRef } from 'react'
+import { useEffect, useLayoutEffect, useMemo, useRef } from 'react'
 import type { AutomationRun } from '../../../../shared/automations-types'
 import type { AutomationAuthorityRef } from '../../../../shared/automation-owner-ref'
 import { capturedAutomationOwner, capturedAutomationOwnerKey } from './automation-captured-owner'
@@ -98,7 +98,9 @@ export function useSelectedAutomationRunHistory(input: SelectedAutomationRunHist
         ].join('|')
       : ''
   const inputRef = useRef({ ...input, target })
-  inputRef.current = { ...input, target }
+  useLayoutEffect(() => {
+    inputRef.current = { ...input, target }
+  })
 
   useEffect(() => {
     const { selected, context, onSettled, target: requestTarget } = inputRef.current
