@@ -14,7 +14,6 @@ import {
   settleHostQueries
 } from './automations-page-test-harness'
 import { makeAutomation, makeRun } from './automations-page-fixtures'
-import { listedRows } from './automations-page-listed-items'
 
 vi.mock('@tanstack/react-virtual', async () => {
   const { createVirtualizerStub } = await import('./virtualizer-test-stub')
@@ -131,6 +130,56 @@ describe('AutomationsPage run navigation', () => {
     expect(mocks.toastMessage).not.toHaveBeenCalled()
   })
 
+  it('shows loading for a workspace run link and cancels it with Escape', async () => {
+    const { container, rerender, automation, oldRun } = await loadCachedHistory()
+    const fresh = Promise.withResolvers<AutomationRun[]>()
+    api.automations.listRuns.mockReturnValue(fresh.promise)
+    mocks.state.pendingAutomationRunNavigation = {
+      automationId: automation.id,
+      runId: oldRun.id
+    }
+
+    await rerender()
+
+    expect(within(container).getByRole('status').textContent).toContain('Loading runs')
+    await act(async () => {
+      window.dispatchEvent(
+        new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true })
+      )
+    })
+    expect(mocks.state.pendingAutomationRunNavigation).toBeNull()
+    await act(async () => fresh.resolve([oldRun]))
+
+    expect(within(container).getByRole('textbox', { name: 'Search runs…' })).toBeTruthy()
+    expect(container.querySelector('[aria-label="Run context"]')).toBeNull()
+    expect(mocks.toastMessage).not.toHaveBeenCalled()
+  })
+
+  it('returns to automation details when cancelling a workspace run link from there', async () => {
+    const { container, rerender, automation, oldRun } = await loadCachedHistory()
+    await act(async () => within(container).getByRole('button', { name: 'Nightly' }).click())
+    const fresh = Promise.withResolvers<AutomationRun[]>()
+    api.automations.listRuns.mockReturnValue(fresh.promise)
+    mocks.state.pendingAutomationRunNavigation = {
+      automationId: automation.id,
+      runId: oldRun.id
+    }
+    await rerender()
+
+    expect(within(container).getByRole('status')).toBeTruthy()
+    await act(async () => {
+      window.dispatchEvent(
+        new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true })
+      )
+    })
+    expect(mocks.state.pendingAutomationRunNavigation).toBeNull()
+    await act(async () => fresh.resolve([oldRun]))
+
+    expect(within(container).getByTestId('detail-pane')).toBeTruthy()
+    expect(container.querySelector('[aria-label="Run context"]')).toBeNull()
+    expect(mocks.toastMessage).not.toHaveBeenCalled()
+  })
+
   it('reports a missing run only after the fresh history confirms its absence', async () => {
     const { rerender, automation, oldRun } = await loadCachedHistory()
     const fresh = Promise.withResolvers<AutomationRun[]>()
@@ -163,52 +212,62 @@ describe('AutomationsPage run navigation', () => {
     expect(mocks.detailPane?.selectedRunsNotice?.message).toContain('Host disconnected')
   })
 
-  it('waits for the selected host when another host has cached history for the same id', async () => {
-    const remoteRun = makeRun({
-      id: 'remote-run',
-      outputSnapshot: {
-        format: 'plain_text',
-        content: 'Output from the selected remote host',
-        capturedAt: 20,
-        truncated: false
-      }
-    })
-    runtimeHost([makeAutomation({ name: 'Remote nightly' })], [remoteRun])
-    const { container, rerender, automation } = await loadCachedHistory()
-    const fresh = Promise.withResolvers<{ runs: AutomationRun[] }>()
-    const originalRpc = mocks.callRuntimeRpc.getMockImplementation()
-    mocks.callRuntimeRpc.mockImplementation(
-      (target: unknown, method: unknown, ...args: unknown[]) => {
-        if (
-          method === 'automation.runs' &&
-          typeof target === 'object' &&
-          target !== null &&
-          'kind' in target &&
-          target.kind === 'environment'
-        ) {
-          return fresh.promise
+  it.each(['all', 'desktop'] as const)(
+    'resolves a workspace run link on its host with colliding ids under the %s filter',
+    async (filter) => {
+      const remoteRun = makeRun({
+        id: 'run-26',
+        outputSnapshot: {
+          format: 'plain_text',
+          content: 'Output from the selected remote host',
+          capturedAt: 20,
+          truncated: false
         }
-        return originalRpc?.(target, method, ...args)
+      })
+      runtimeHost([makeAutomation({ name: 'Remote nightly' })], [remoteRun])
+      if (filter === 'desktop') {
+        mocks.state.automationHostFilter = {
+          kind: 'host',
+          host: { authority: { kind: 'desktop' }, selector: { kind: 'self' } }
+        }
       }
-    )
-    const remoteRow = listedRows().find((row) => row.automation.name === 'Remote nightly')
-    expect(remoteRow).toBeTruthy()
-    await act(async () => {
-      mocks.listPanel?.selectAutomationRow(remoteRow?.key ?? null)
-      mocks.state.pendingAutomationRunNavigation = {
-        automationId: automation.id,
-        runId: remoteRun.id,
-        hostId: 'runtime:gpu'
-      }
-    })
-    await rerender()
+      mocks.setAutomationHostFilter.mockImplementation((next) => {
+        mocks.state.automationHostFilter = next
+      })
+      const { container, rerender, automation } = await loadCachedHistory()
+      const fresh = Promise.withResolvers<{ runs: AutomationRun[] }>()
+      const originalRpc = mocks.callRuntimeRpc.getMockImplementation()
+      mocks.callRuntimeRpc.mockImplementation(
+        (target: unknown, method: unknown, ...args: unknown[]) => {
+          if (
+            method === 'automation.runs' &&
+            typeof target === 'object' &&
+            target !== null &&
+            'kind' in target &&
+            target.kind === 'environment'
+          ) {
+            return fresh.promise
+          }
+          return originalRpc?.(target, method, ...args)
+        }
+      )
+      await act(async () => {
+        mocks.state.pendingAutomationRunNavigation = {
+          automationId: automation.id,
+          runId: remoteRun.id,
+          hostId: 'runtime:gpu'
+        }
+      })
+      await rerender()
+      await rerender()
 
-    expect(mocks.toastMessage).not.toHaveBeenCalled()
-    expect(mocks.state.pendingAutomationRunNavigation).not.toBeNull()
-    await act(async () => fresh.resolve({ runs: [remoteRun] }))
+      expect(mocks.toastMessage).not.toHaveBeenCalled()
+      expect(mocks.state.pendingAutomationRunNavigation).not.toBeNull()
+      await act(async () => fresh.resolve({ runs: [remoteRun] }))
 
-    expect(mocks.state.pendingAutomationRunNavigation).toBeNull()
-    expect(container.textContent).toContain('Output from the selected remote host')
-    expect(mocks.toastMessage).not.toHaveBeenCalled()
-  })
+      expect(mocks.state.pendingAutomationRunNavigation).toBeNull()
+      expect(container.textContent).toContain('Output from the selected remote host')
+      expect(mocks.toastMessage).not.toHaveBeenCalled()
+    }
+  )
 })

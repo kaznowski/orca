@@ -1,7 +1,12 @@
 import { useEffect, useMemo } from 'react'
 import { toast } from 'sonner'
 import { translate } from '@/i18n/i18n'
-import { getAutomationHostTargetKey, getAutomationTargetFromHostId } from './automation-host-client'
+import {
+  getAutomationAuthorityTarget,
+  getAutomationHostTargetKey,
+  getAutomationTargetFromHostId
+} from './automation-host-client'
+import { ALL_AUTOMATION_HOSTS_FILTER } from '../../../../shared/automation-host-filter'
 import { useAppStore } from '@/store'
 import {
   getAutomationRunOwnerEnvironmentId,
@@ -49,10 +54,18 @@ export function useAutomationRunPageState({
     selectExternalKey,
     pageView,
     setPageView,
+    setRunPageOrigin,
     isDetailOpen,
     setIsDetailOpen
   } = local
-  const { selected, selectedRow } = list
+  const {
+    selected,
+    selectedRow,
+    visibleRows,
+    externalAutomationEntries,
+    hostCatalog,
+    selectAutomationRow
+  } = list
   const { selectedRuns, selectedRunsReady, selectedRunsNotice, selectedAutomationRunPage } = setup
 
   useEffect(() => {
@@ -60,11 +73,11 @@ export function useAutomationRunPageState({
       return
     }
     const hasSelectedLocal = selectedRow?.key
-      ? list.visibleRows.some((row) => row.key === selectedRow.key)
+      ? visibleRows.some((row) => row.key === selectedRow.key)
       : selectedId !== null && selectedRow !== null
     const hasSelectedExternal =
       selectedExternalKey !== null &&
-      list.externalAutomationEntries.some((entry) => entry.key === selectedExternalKey)
+      externalAutomationEntries.some((entry) => entry.key === selectedExternalKey)
     if (hasSelectedLocal || hasSelectedExternal) {
       return
     }
@@ -73,8 +86,8 @@ export function useAutomationRunPageState({
     setActivePaneTab('overview')
   }, [
     isDetailOpen,
-    list.externalAutomationEntries,
-    list.visibleRows,
+    externalAutomationEntries,
+    visibleRows,
     pendingAutomationRunNavigation,
     selectedExternalKey,
     selectedId,
@@ -84,10 +97,17 @@ export function useAutomationRunPageState({
     setSelectedAutomationRunPageId
   ])
   useEffect(() => {
-    if (!pendingAutomationRunNavigation || isLoading) {
+    if (!pendingAutomationRunNavigation) {
       return
     }
     const pending = pendingAutomationRunNavigation
+    if (pending.runId && pageView !== 'run') {
+      setRunPageOrigin(pageView === 'automations' && isDetailOpen ? 'automation' : 'runs')
+      setPageView('run')
+    }
+    if (isLoading) {
+      return
+    }
     const pendingTargetKey = getAutomationHostTargetKey(
       getAutomationTargetFromHostId(pending.hostId)
     )
@@ -115,8 +135,21 @@ export function useAutomationRunPageState({
       )
       return
     }
-    if (selectedId !== pending.automationId) {
-      setSelectedId(pending.automationId)
+    const pendingRow = visibleRows.find(
+      (row) =>
+        row.automation.id === pending.automationId &&
+        (!row.catalogRef ||
+          getAutomationHostTargetKey(getAutomationAuthorityTarget(row.catalogRef.authority)) ===
+            pendingTargetKey)
+    )
+    if (!pendingRow) {
+      if (hostCatalog.resolution.effective.kind !== 'all') {
+        hostCatalog.selectHost(ALL_AUTOMATION_HOSTS_FILTER)
+      }
+      return
+    }
+    if (selectedId !== pending.automationId || selectedRow?.key !== pendingRow.key) {
+      selectAutomationRow(pendingRow.key)
       setIsDetailOpen(true)
       return
     }
@@ -163,11 +196,16 @@ export function useAutomationRunPageState({
     automations,
     automationHostTargetKey,
     isLoading,
+    isDetailOpen,
+    hostCatalog,
+    selectAutomationRow,
+    visibleRows,
     pendingAutomationRunNavigation,
     pageView,
     selectExternalKey,
     selectedExternalKey,
     selectedId,
+    selectedRow,
     selectedRuns,
     selectedRunsReady,
     selectedRunsNotice,
@@ -175,6 +213,7 @@ export function useAutomationRunPageState({
     setIsDetailOpen,
     setPendingAutomationRunNavigation,
     setPageView,
+    setRunPageOrigin,
     setSelectedAutomationRunPageId,
     setSelectedId
   ])
